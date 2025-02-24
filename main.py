@@ -55,10 +55,10 @@ terminals, transactions и passport_blacklist,
 что соответствует смене паспорта пользователем.
 '''
 
-#Загружка данных в STG
+#Загрузка данных в STG
 ##################################################################################################################################################################
 
-def text_csv_2sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
+def text_csv_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
     if '.txt' in path:
         df = pd.read_csv(path, sep=';')
         df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index)
@@ -66,6 +66,61 @@ def text_csv_2sql(path, name, con=sql_alch_conn, schema='bank', if_exists='repla
         df = pd.read_excel(path)
         df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index)
 
-text_csv_2sql('transactions_01032021.txt', 'stg_transaction')
-text_csv_2sql('terminals_01032021.xlsx', 'stg_terminals')
-text_csv_2sql('passport_blacklist_01032021.xlsx', 'stg_passport_blacklist')
+text_csv_2_sql('transactions_01032021.txt', 'stg_transaction')
+text_csv_2_sql('terminals_01032021.xlsx', 'stg_terminals')
+text_csv_2_sql('passport_blacklist_01032021.xlsx', 'stg_passport_blacklist')
+
+#Создание исторических таблиц
+##################################################################################################################################################################
+
+def create_hist_passport_blacklist(date):
+    cursor.execute(
+        '''
+        create table if not exists DWH_DIM_PASSPORT_BLACKLIST_HIST(
+        id serial primary key,
+        effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
+        effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
+        delete_flg integer default 0,
+        passport varchar(128)
+        )
+        ''', [date]
+    )
+    conn.commit()
+    
+def create_hist_terminals(date):
+    cursor.execute(
+        '''
+        create table if not exists DWH_DIM_TERMINALS_HIST(
+        id serial primary key,
+        terminal_id varchar(128),
+        terminal_type varchar(128),
+        terminal_city varchar(128),
+        terminal_address varchar(128),
+        effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
+        effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
+        delete_flg integer default 0
+        )
+        ''', [date]
+    )
+    conn.commit()
+
+def create_hist_transactions():
+    cursor.execute(
+        '''
+        create table if not exists DWH_DIM_TRANSACTIONS_HIST(
+		transaction_id integer,
+		transaction_date timestamp,
+		amount decimal(10, 2),
+		card_num varchar(128),
+		oper_type varchar(128),
+		oper_result varchar(128),
+		terminal varchar(128)
+        )
+        '''
+    )
+    conn.commit()
+
+date = '2021-03-01'
+create_hist_passport_blacklist(date)
+create_hist_terminals(date)
+create_hist_transactions()
