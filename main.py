@@ -59,6 +59,10 @@ terminals, transactions и passport_blacklist,
 ##################################################################################################################################################################
 
 def text_csv_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
+
+    cursor.execute(f'drop table if exists {name};')
+    conn.commit()
+
     if '.txt' in path:
         df = pd.read_csv(path, sep=';')
         df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index)
@@ -66,7 +70,7 @@ def text_csv_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='repl
         df = pd.read_excel(path)
         df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index)
 
-text_csv_2_sql('transactions_01032021.txt', 'stg_transaction')
+text_csv_2_sql('transactions_01032021.txt', 'stg_new_rows_transaction')
 text_csv_2_sql('terminals_01032021.xlsx', 'stg_terminals')
 text_csv_2_sql('passport_blacklist_01032021.xlsx', 'stg_passport_blacklist')
 
@@ -124,3 +128,47 @@ date = '2021-03-01'
 create_hist_passport_blacklist(date)
 create_hist_terminals(date)
 create_hist_transactions()
+
+#Создание временных таблиц для новых строк
+##################################################################################################################################################################
+
+def create_new_rows_terminals():
+
+    cursor.execute('drop table if exists stg_new_rows_terminals;')
+    conn.commit()
+
+    cursor.execute(
+        '''
+        create table stg_new_rows_terminals as
+            select t1.terminal_id,
+                   t1.terminal_type,
+                   t1.terminal_city,
+                   t1.terminal_address
+            from stg_terminals as t1
+            left join DWH_DIM_TERMINALS_HIST as t2
+            on t1.terminal_id = t2.terminal_id
+            where t2.terminal_id is null
+        ''')
+    conn.commit()
+
+def create_new_rows_passport_blacklist():
+
+    cursor.execute('drop table if exists stg_new_rows_passport_blacklist')
+
+    cursor.execute(
+        '''
+        create table stg_new_rows_passport_blacklist as
+            select t1.date,
+                   t1.passport
+            from stg_passport_blacklist as t1
+            left join DWH_DIM_PASSPORT_BLACKLIST_HIST as t2
+            on t1.passport = t2.passport
+            where t2.passport is null
+        ''')
+    conn.commit()
+
+create_new_rows_terminals()
+create_new_rows_passport_blacklist()
+
+
+
