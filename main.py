@@ -1,9 +1,9 @@
 import psycopg2
 import json
+import shutil
 import pandas as pd
 from pathlib import Path
 from sqlalchemy import create_engine, DECIMAL
-
 
 #Подключение к БД
 ##################################################################################################################################################################
@@ -19,30 +19,44 @@ sql_alch_conn = create_engine(f"postgresql://{db_config['user']}:{db_config['pas
 #Создание схемы BANK
 ##################################################################################################################################################################
 
-cursor.execute('drop schema if exists bank cascade;')
-conn.commit()
-cursor.execute('create schema if not exists bank;')
-conn.commit()
+def getting_date():
+    filename = list(Path('incoming_files').iterdir())[0].name
+    dot_index = filename.find('.')
+    date_string = filename[dot_index - 8:dot_index]
+
+    year = date_string[-4:]
+    month = date_string[-6:-4]
+    day = date_string[-8:-6]
+
+    return f"{year}-{month}-{day} 00:00:00"
+
+date = getting_date()
+
+if '2021-03-01' in date:
+    cursor.execute('drop schema if exists bank cascade;')
+    conn.commit()
+    cursor.execute('create schema if not exists bank;')
+    conn.commit()
+
+    with open('sql_scripts/ddl_dml.sql', 'r', encoding='UTF-8') as f:
+        loading_script = f.read()
+
+    replacements = {
+        "cards": "DWH_DIM_CARDS",
+        "clients": "DWH_DIM_CLIENTS",
+        "accounts": "DWH_DIM_ACCOUNTS"    
+    }
+
+    for old, new in replacements.items():
+        loading_script = loading_script.replace(old, new)
+
+    for part in loading_script.split(';'):
+        part = part.strip()
+        if part:
+            cursor.execute(part)
+            conn.commit()
 
 cursor.execute('set search_path to bank;')
-
-with open('sql_scripts/ddl_dml.sql', 'r', encoding='UTF-8') as f:
-    loading_script = f.read()
-
-replacements = {
-    "cards": "DWH_DIM_CARDS",
-    "clients": "DWH_DIM_CLIENTS",
-    "accounts": "DWH_DIM_ACCOUNTS"    
-}
-
-for old, new in replacements.items():
-    loading_script = loading_script.replace(old, new)
-
-for part in loading_script.split(';'):
-    part = part.strip()
-    if part:
-        cursor.execute(part)
-        conn.commit()
 
 '''
 Далее, поскольку предполагается, что на вход нам подаются лишь сущности 
@@ -79,9 +93,16 @@ def text_csv_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='repl
 
     df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index, dtype=dtype)
 
-text_csv_2_sql('transactions_01032021.txt', 'stg_new_rows_transactions')
-text_csv_2_sql('terminals_01032021.xlsx', 'stg_terminals')
-text_csv_2_sql('passport_blacklist_01032021.xlsx', 'stg_passport_blacklist')
+text_csv_2_sql(f'incoming_files/transactions_{date_string}.txt', 'stg_new_rows_transactions')
+text_csv_2_sql(f'incoming_files/terminals_{date_string}.xlsx', 'stg_terminals')
+text_csv_2_sql(f'incoming_files/passport_blacklist_{date_string}.xlsx', 'stg_passport_blacklist')
+
+#Перенос файлов в архив
+##################################################################################################################################################################
+
+for file_path in Path('incoming_files').iterdir():
+    destination_path = Path('archive') / file_path.name
+    shutil.move(str(file_path), str(destination_path)) 
 
 #Создание исторических таблиц
 ##################################################################################################################################################################
@@ -133,11 +154,6 @@ def create_hist_transactions():
     )
     conn.commit()
 
-p = Path('.')
-
-
-
-date = '2021-03-01 00:00:00'
 create_hist_passport_blacklist(date)
 create_hist_terminals(date)
 create_hist_transactions()
@@ -350,7 +366,6 @@ def update_terminals_hist_table():
                 ''', [date])
     conn.commit()
 
-
 def update_passport_blacklist_hist_table():
 
     #добавляем новые записи
@@ -380,8 +395,23 @@ def update_passport_blacklist_hist_table():
                 ''', [date])
     conn.commit()
 
-    
-
 update_transactions_hist_table()
 update_terminals_hist_table()
 update_passport_blacklist_hist_table()
+
+#Удаление временных таблиц
+##################################################################################################################################################################
+
+def del_stg_tables():
+    cursor.execute('''drop table if exists stg_deleted_rows_passport_blacklist''')
+    cursor.execute('''drop table if exists stg_deleted_rows_terminals''')
+    cursor.execute('''drop table if exists stg_new_rows_passport_blacklist''')
+    cursor.execute('''drop table if exists stg_new_rows_terminals''')
+    cursor.execute('''drop table if exists stg_new_rows_transactions''')
+    cursor.execute('''drop table if exists stg_passport_blacklist''')
+    cursor.execute('''drop table if exists stg_terminals''')
+    cursor.execute('''drop table if exists stg_updated_rows_terminals''')
+
+    conn.commit()    
+
+del_stg_tables()
