@@ -19,24 +19,23 @@ sql_alch_conn = create_engine(f"postgresql://{db_config['user']}:{db_config['pas
 #Создание схемы BANK
 ##################################################################################################################################################################
 
-def getting_date():
-    filename = list(Path('incoming_files').iterdir())[0].name
-    dot_index = filename.find('.')
-    date_string = filename[dot_index - 8:dot_index]
+#получаем дату входящих файлов
+filename = list(Path('incoming_files').iterdir())[0].name
+dot_index = filename.find('.')
+date_string = filename[dot_index - 8:dot_index]
+year = date_string[-4:]
+month = date_string[-6:-4]
+day = date_string[-8:-6]
 
-    year = date_string[-4:]
-    month = date_string[-6:-4]
-    day = date_string[-8:-6]
-
-    return f"{year}-{month}-{day} 00:00:00"
-
-date = getting_date()
+date = f"{year}-{month}-{day} 00:00:00"
 
 if '2021-03-01' in date:
     cursor.execute('drop schema if exists bank cascade;')
     conn.commit()
     cursor.execute('create schema if not exists bank;')
     conn.commit()
+
+    cursor.execute('set search_path to bank;')
 
     with open('sql_scripts/ddl_dml.sql', 'r', encoding='UTF-8') as f:
         loading_script = f.read()
@@ -72,7 +71,7 @@ terminals, transactions и passport_blacklist,
 #Загрузка данных в STG
 ##################################################################################################################################################################
 
-def text_csv_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
+def txt_xlsx_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
 
     cursor.execute(f'drop table if exists {name};')
     conn.commit()
@@ -93,9 +92,9 @@ def text_csv_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='repl
 
     df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index, dtype=dtype)
 
-text_csv_2_sql(f'incoming_files/transactions_{date_string}.txt', 'stg_new_rows_transactions')
-text_csv_2_sql(f'incoming_files/terminals_{date_string}.xlsx', 'stg_terminals')
-text_csv_2_sql(f'incoming_files/passport_blacklist_{date_string}.xlsx', 'stg_passport_blacklist')
+txt_xlsx_2_sql(f'incoming_files/transactions_{date_string}.txt', 'stg_new_rows_transactions')
+txt_xlsx_2_sql(f'incoming_files/terminals_{date_string}.xlsx', 'stg_terminals')
+txt_xlsx_2_sql(f'incoming_files/passport_blacklist_{date_string}.xlsx', 'stg_passport_blacklist')
 
 #Перенос файлов в архив
 ##################################################################################################################################################################
@@ -115,10 +114,21 @@ def create_hist_passport_blacklist(date):
         effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
         effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
         deleted_flg integer default 0,
-        passport varchar(128)
-        )
-        ''', [date]
-    )
+        passport varchar(128))
+        ''', [date])
+    conn.commit()
+
+    cursor.execute('drop view if exists v_passport_blacklist')
+    conn.commit()
+
+    cursor.execute(
+        '''
+        create view v_passport_blacklist as 
+            select effective_from, passport
+            from DWH_DIM_PASSPORT_BLACKLIST_HIST
+            where effective_to = to_timestamp('2999-12-31', 'YYYY-MM-DD')
+            and deleted_flg = 0
+        ''')
     conn.commit()
     
 def create_hist_terminals(date):
@@ -132,10 +142,25 @@ def create_hist_terminals(date):
         terminal_address varchar(128),
         effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
         effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
-        deleted_flg integer default 0
-        )
-        ''', [date]
-    )
+        deleted_flg integer default 0)
+        ''', [date])
+    conn.commit()
+
+    cursor.execute('drop view if exists v_terminals')
+    conn.commit()
+
+    cursor.execute(
+        '''
+        create view v_terminals as 
+            select 
+                terminal_id,
+                terminal_type,
+                terminal_city,
+                terminal_address
+            from DWH_DIM_TERMINALS_HIST
+            where effective_to = to_timestamp('2999-12-31', 'YYYY-MM-DD')
+            and deleted_flg = 0
+        ''')
     conn.commit()
 
 def create_hist_transactions():
@@ -148,10 +173,8 @@ def create_hist_transactions():
 		card_num varchar(128),
 		oper_type varchar(128),
 		oper_result varchar(128),
-		terminal varchar(128)
-        )
-        '''
-    )
+		terminal varchar(128))
+        ''')
     conn.commit()
 
 create_hist_passport_blacklist(date)
@@ -169,12 +192,13 @@ def create_new_rows_terminals():
     cursor.execute(
         '''
         create table stg_new_rows_terminals as
-            select t1.terminal_id,
-                   t1.terminal_type,
-                   t1.terminal_city,
-                   t1.terminal_address
+            select
+                t1.terminal_id,
+                t1.terminal_type,
+                t1.terminal_city,
+                t1.terminal_address
             from stg_terminals as t1
-            left join DWH_DIM_TERMINALS_HIST as t2
+            left join v_terminals as t2
             on t1.terminal_id = t2.terminal_id
             where t2.terminal_id is null
         ''')
@@ -187,10 +211,11 @@ def create_new_rows_passport_blacklist():
     cursor.execute(
         '''
         create table stg_new_rows_passport_blacklist as
-            select t1.date,
-                   t1.passport
+            select
+                t1.date,
+                t1.passport
             from stg_passport_blacklist as t1
-            left join DWH_DIM_PASSPORT_BLACKLIST_HIST as t2
+            left join v_passport_blacklist as t2
             on t1.passport = t2.passport
             where t2.passport is null
         ''')
@@ -210,12 +235,13 @@ def create_deleted_rows_terminals():
     cursor.execute(
         '''
         create table stg_deleted_rows_terminals as
-            select t2.terminal_id,
-                   t2.terminal_type,
-                   t2.terminal_city,
-                   t2.terminal_address
+            select
+                t2.terminal_id,
+                t2.terminal_type,
+                t2.terminal_city,
+                t2.terminal_address
             from stg_terminals as t1
-            right join DWH_DIM_TERMINALS_HIST as t2
+            right join v_terminals as t2
             on t1.terminal_id = t2.terminal_id
             where t1.terminal_id is null
         ''')
@@ -228,10 +254,11 @@ def create_deleted_rows_passport_blacklist():
     cursor.execute(
         '''
         create table stg_deleted_rows_passport_blacklist as
-            select t2.effective_from,
-                   t2.passport
+            select
+                t2.effective_from,
+                t2.passport
             from stg_passport_blacklist as t1
-            right join DWH_DIM_PASSPORT_BLACKLIST_HIST as t2
+            right join v_passport_blacklist as t2
             on t1.passport = t2.passport
             where t1.passport is null
         ''')
@@ -251,12 +278,13 @@ def create_updated_rows_terminals():
     cursor.execute(
         '''
         create table stg_updated_rows_terminals as
-            select t1.terminal_id,
-                   t1.terminal_type,
-                   t1.terminal_city,
-                   t1.terminal_address
+            select
+                t1.terminal_id,
+                t1.terminal_type,
+                t1.terminal_city,
+                t1.terminal_address
             from stg_terminals as t1
-            inner join DWH_DIM_TERMINALS_HIST as t2
+            inner join v_terminals as t2
             on t1.terminal_id = t2.terminal_id
             and (t1.terminal_type <> t2.terminal_type or
                  t1.terminal_city <> t2.terminal_city or
@@ -281,118 +309,129 @@ def update_transactions_hist_table():
 
     #просто добавляем в историческую таблицу новые записи
     cursor.execute(
-                '''
-                insert into DWH_DIM_TRANSACTIONS_HIST
-                select * from stg_new_rows_transactions;
-                ''')
-    conn.commit()
+        '''
+        insert into DWH_DIM_TRANSACTIONS_HIST
+        select 
+            t2.transaction_id,
+            t2.transaction_date,
+            t2.amount,
+            t2.card_num,
+            t2.oper_type,
+            t2.oper_result,
+            t2.terminal
+        from DWH_DIM_TRANSACTIONS_HIST as t1
+        right join stg_new_rows_transactions as t2
+        on t1.transaction_id = t2.transaction_id
+        where t1.transaction_id is null
+        ''')
+conn.commit()
 
 def update_terminals_hist_table():
 
     #добавляем в историческую таблицу новые записи
     cursor.execute(
-                '''
-                insert into DWH_DIM_TERMINALS_HIST (
-                terminal_id,
-                terminal_type,
-                terminal_city,
-                terminal_address,
-                effective_from
-                )
-                select terminal_id,
-                terminal_type,
-                terminal_city,
-                terminal_address,
-                %s 
-                from stg_new_rows_terminals;
-                ''', [date])
+        '''
+        insert into DWH_DIM_TERMINALS_HIST (
+        terminal_id,
+        terminal_type,
+        terminal_city,
+        terminal_address,
+        effective_from
+        )
+        select terminal_id,
+        terminal_type,
+        terminal_city,
+        terminal_address,
+        %s 
+        from stg_new_rows_terminals;
+        ''', [date])
     conn.commit()
 
     #закрываем end_dttm у старых записей
     cursor.execute(
-                '''
-                update DWH_DIM_TERMINALS_HIST
-                set effective_to = date_trunc('second', %s::date - interval '1 second')
-                where terminal_id in (select terminal_id from stg_updated_rows_terminals)
-                ''', [date])
+        '''
+        update DWH_DIM_TERMINALS_HIST
+        set effective_to = date_trunc('second', %s::date - interval '1 second')
+        where terminal_id in (select terminal_id from stg_updated_rows_terminals)
+        ''', [date])
     conn.commit()
     
     #и добавляем обновленные
     cursor.execute(
-                '''
-                insert into DWH_DIM_TERMINALS_HIST (
-                terminal_id,
-                terminal_type,
-                terminal_city,
-                terminal_address,
-                effective_from
-                )
-                select terminal_id,
-                terminal_type,
-                terminal_city,
-                terminal_address,
-                %s 
-                from stg_updated_rows_terminals;
-                ''', [date])
+        '''
+        insert into DWH_DIM_TERMINALS_HIST (
+        terminal_id,
+        terminal_type,
+        terminal_city,
+        terminal_address,
+        effective_from
+        )
+        select terminal_id,
+        terminal_type,
+        terminal_city,
+        terminal_address,
+        %s 
+        from stg_updated_rows_terminals;
+        ''', [date])
     conn.commit()
 
     #закрываем удаленные записи
     cursor.execute(
-                '''
-                update DWH_DIM_TERMINALS_HIST
-                set effective_to = date_trunc('second', %s::date - interval '1 second')
-                where terminal_id in (select terminal_id from stg_deleted_rows_terminals)
-                ''', [date])
+        '''
+        update DWH_DIM_TERMINALS_HIST
+        set effective_to = date_trunc('second', %s::date - interval '1 second')
+        where terminal_id in (select terminal_id from stg_deleted_rows_terminals)
+        ''', [date])
     conn.commit()
 
     #и добавляем информацию о том, что они удалены
     cursor.execute(
-                '''
-                insert into DWH_DIM_TERMINALS_HIST (
-                terminal_id,
-                terminal_type,
-                terminal_city,
-                terminal_address,
-                effective_from,
-                deleted_flg
-                )
-                select terminal_id,
-                terminal_type,
-                terminal_city,
-                terminal_address,
-                %s, 
-                1 
-                from stg_deleted_rows_terminals;
-                ''', [date])
+        '''
+        insert into DWH_DIM_TERMINALS_HIST (
+        terminal_id,
+        terminal_type,
+        terminal_city,
+        terminal_address,
+        effective_from,
+        deleted_flg
+        )
+        select terminal_id,
+        terminal_type,
+        terminal_city,
+        terminal_address,
+        %s, 
+        1 
+        from stg_deleted_rows_terminals;
+        ''', [date])
     conn.commit()
 
 def update_passport_blacklist_hist_table():
 
     #добавляем новые записи
     cursor.execute(
-                '''
-                insert into DWH_DIM_PASSPORT_BLACKLIST_HIST (passport, effective_from)
-                select passport, date
-                from stg_new_rows_passport_blacklist;
-                ''')
+        '''
+        insert into DWH_DIM_PASSPORT_BLACKLIST_HIST (passport, effective_from)
+        select passport, date
+        from stg_new_rows_passport_blacklist;
+        ''')
     conn.commit()
 
    #закрываем end_dttm у удаленых записей
     cursor.execute(
-                '''
-                update DWH_DIM_PASSPORT_BLACKLIST_HIST
-                set effective_to = date_trunc('second', %s::date - interval '1 second')
-                where passport in (select passport from stg_deleted_rows_passport_blacklist)
-                ''', [date])
+        '''
+        update DWH_DIM_PASSPORT_BLACKLIST_HIST
+        set effective_to = date_trunc('second', %s::date - interval '1 second')
+        where passport in (select passport from stg_deleted_rows_passport_blacklist)
+        ''', [date])
     conn.commit()
 
     #и добавляем информацию о том, что они удалены
     cursor.execute(
-                '''
-                insert into DWH_DIM_PASSPORT_BLACKLIST_HIST (passport, effective_from, deleted_flg)
-                select passport, %s, 1
-                from stg_deleted_rows_passport_blacklist;
-                ''', [date])
+        '''
+        insert into DWH_DIM_PASSPORT_BLACKLIST_HIST (passport, effective_from, deleted_flg)
+        select passport, %s, 1
+        from stg_deleted_rows_passport_blacklist;
+        ''', [date])
     conn.commit()
 
 update_transactions_hist_table()
@@ -415,3 +454,5 @@ def del_stg_tables():
     conn.commit()    
 
 del_stg_tables()
+
+#файлы в incoming последовательно кидать надо
