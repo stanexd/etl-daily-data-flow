@@ -522,7 +522,7 @@ def update_rep_fraud():
                 passport_num,
                 phone,
                 min(transaction_date) over (partition by passport_num, date_trunc('hour', transaction_date)) as hour_group
-            from dwh_dim_transactions_hist as th
+            from stg_new_rows_transactions as th
             left join v_terminals vt 
             on th.terminal = vt.terminal_id
             left join dwh_dim_cards as ca 
@@ -546,7 +546,6 @@ def update_rep_fraud():
             hg.fio,
             hg.phone,
             'different cities' as event_type,
-            hg.transaction_date::date as event_dt,
             hg.transaction_date::date as report_dt
         from hourgroups as hg
         left join citycounts as cc 
