@@ -70,7 +70,7 @@ terminals, transactions и passport_blacklist,
 
 #Загрузка данных в STG
 #(для корректной работы скрипта, перед запуском в incoming_files необходимо загружать по три входящих файла,
-#после чего они будут складываться в archive)
+#после чего они будут отправляться в archive)
 ##################################################################################################################################################################
 
 def txt_xlsx_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
@@ -83,13 +83,13 @@ def txt_xlsx_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='repl
     if '.xlsx' in path:
         df = pd.read_excel(path)
 
+    #приведение типов
     for col in df.columns:
         if 'date' in col.lower():
             df[col] = pd.to_datetime(df[col], errors='coerce')
-    
-    if 'amount' in df.columns:
-        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-    
+        if 'amount' in df.columns:
+            df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        
     dtype = {'amount': DECIMAL(10, 2)}
 
     df.to_sql(name=name, con=con, schema=schema, if_exists=if_exists, index=index, dtype=dtype)
@@ -109,14 +109,16 @@ for file_path in Path('incoming_files').iterdir():
 ##################################################################################################################################################################
 
 def create_hist_passport_blacklist(date):
+    
     cursor.execute(
         '''
         create table if not exists DWH_DIM_PASSPORT_BLACKLIST_HIST(
-        id serial primary key,
-        effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
-        effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
-        deleted_flg integer default 0,
-        passport varchar(128))
+            id serial primary key,
+            effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
+            effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
+            deleted_flg integer default 0,
+            passport varchar(128)
+        )
         ''', [date])
     conn.commit()
 
@@ -126,7 +128,9 @@ def create_hist_passport_blacklist(date):
     cursor.execute(
         '''
         create view v_passport_blacklist as 
-            select effective_from, passport
+            select 
+                effective_from, 
+                passport
             from DWH_DIM_PASSPORT_BLACKLIST_HIST
             where effective_to = to_timestamp('2999-12-31', 'YYYY-MM-DD')
             and deleted_flg = 0
@@ -137,14 +141,15 @@ def create_hist_terminals(date):
     cursor.execute(
         '''
         create table if not exists DWH_DIM_TERMINALS_HIST(
-        id serial primary key,
-        terminal_id varchar(128),
-        terminal_type varchar(128),
-        terminal_city varchar(128),
-        terminal_address varchar(128),
-        effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
-        effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
-        deleted_flg integer default 0)
+            id serial primary key,
+            terminal_id varchar(128),
+            terminal_type varchar(128),
+            terminal_city varchar(128),
+            terminal_address varchar(128),
+            effective_from timestamp default to_timestamp(%s, 'YYYY-MM-DD'),
+            effective_to timestamp default (to_timestamp('2999-12-31', 'YYYY-MM-DD')),
+            deleted_flg integer default 0
+        )
         ''', [date])
     conn.commit()
 
@@ -169,13 +174,14 @@ def create_hist_transactions():
     cursor.execute(
         '''
         create table if not exists DWH_DIM_TRANSACTIONS_HIST(
-		transaction_id int8,
-		transaction_date timestamp,
-		amount numeric(10, 2),
-		card_num varchar(128),
-		oper_type varchar(128),
-		oper_result varchar(128),
-		terminal varchar(128))
+            transaction_id int8,
+            transaction_date timestamp,
+            amount numeric(10, 2),
+            card_num varchar(128),
+            oper_type varchar(128),
+            oper_result varchar(128),
+            terminal varchar(128)
+        )
         ''')
     conn.commit()
 
@@ -209,7 +215,8 @@ def create_new_rows_terminals():
 def create_new_rows_passport_blacklist():
 
     cursor.execute('drop table if exists stg_new_rows_passport_blacklist')
-
+    conn.commit()
+    
     cursor.execute(
         '''
         create table stg_new_rows_passport_blacklist as
@@ -252,6 +259,7 @@ def create_deleted_rows_terminals():
 def create_deleted_rows_passport_blacklist():
 
     cursor.execute('drop table if exists stg_deleted_rows_passport_blacklist')
+    conn.commit()
 
     cursor.execute(
         '''
@@ -334,17 +342,18 @@ def update_terminals_hist_table():
     cursor.execute(
         '''
         insert into DWH_DIM_TERMINALS_HIST (
-        terminal_id,
-        terminal_type,
-        terminal_city,
-        terminal_address,
-        effective_from
+            terminal_id,
+            terminal_type,
+            terminal_city,
+            terminal_address,
+            effective_from
         )
-        select terminal_id,
-        terminal_type,
-        terminal_city,
-        terminal_address,
-        %s 
+        select 
+            terminal_id,
+            terminal_type,
+            terminal_city,
+            terminal_address,
+            %s 
         from stg_new_rows_terminals;
         ''', [date])
     conn.commit()
@@ -362,17 +371,18 @@ def update_terminals_hist_table():
     cursor.execute(
         '''
         insert into DWH_DIM_TERMINALS_HIST (
-        terminal_id,
-        terminal_type,
-        terminal_city,
-        terminal_address,
-        effective_from
+            terminal_id,
+            terminal_type,
+            terminal_city,
+            terminal_address,
+            effective_from
         )
-        select terminal_id,
-        terminal_type,
-        terminal_city,
-        terminal_address,
-        %s 
+        select 
+            terminal_id,
+            terminal_type,
+            terminal_city,
+            terminal_address,
+            %s 
         from stg_updated_rows_terminals;
         ''', [date])
     conn.commit()
@@ -390,19 +400,20 @@ def update_terminals_hist_table():
     cursor.execute(
         '''
         insert into DWH_DIM_TERMINALS_HIST (
-        terminal_id,
-        terminal_type,
-        terminal_city,
-        terminal_address,
-        effective_from,
-        deleted_flg
+            terminal_id,
+            terminal_type,
+            terminal_city,
+            terminal_address,
+            effective_from,
+            deleted_flg
         )
-        select terminal_id,
-        terminal_type,
-        terminal_city,
-        terminal_address,
-        %s, 
-        1 
+        select 
+            terminal_id,
+            terminal_type,
+            terminal_city,
+            terminal_address,
+            %s, 
+            1 
         from stg_deleted_rows_terminals;
         ''', [date])
     conn.commit()
@@ -448,12 +459,13 @@ def create_rep_fraud():
     cursor.execute(
         '''
         create table if not exists REP_FRAUD(
-		event_dt date,
-		passport varchar(128),
-		fio varchar(128),
-		phone varchar(128),
-		event_type varchar(128),
-		report_dt date)
+            event_dt date,
+            passport varchar(128),
+            fio varchar(128),
+            phone varchar(128),
+            event_type varchar(128),
+            report_dt date
+        )
         ''')
     conn.commit()
 
@@ -468,12 +480,13 @@ def update_rep_fraud():
     cursor.execute(
         '''
         insert into REP_FRAUD (
-        event_dt,
-		passport,
-		fio,
-		phone,
-		event_type,
-		report_dt)
+            event_dt,
+            passport,
+            fio,
+            phone,
+            event_type,
+            report_dt
+        )
         select distinct
             to_char(tr.transaction_date, 'YYYY-MM-DD')::date as event_dt,
             cl.passport_num,
@@ -507,12 +520,13 @@ def update_rep_fraud():
     cursor.execute(
         '''
         insert into REP_FRAUD (
-        event_dt,
-		passport,
-		fio,
-		phone,
-		event_type,
-		report_dt)
+            event_dt,
+            passport,
+            fio,
+            phone,
+            event_type,
+            report_dt
+        )
         with hourgroups as (
             select
                 transaction_date,
@@ -538,8 +552,7 @@ def update_rep_fraud():
                 count(distinct terminal_city) as count_cities
             from hourgroups
             where transaction_date < hour_group + interval '1 hour'
-            group by passport_num, hour_group
-        )
+            group by passport_num, hour_group)
         select distinct
             hg.transaction_date::date as event_dt,
             hg.passport_num,
