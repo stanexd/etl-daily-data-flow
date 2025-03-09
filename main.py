@@ -69,6 +69,8 @@ terminals, transactions и passport_blacklist,
 '''
 
 #Загрузка данных в STG
+#(для корректной работы скрипта, перед запуском в incoming_files необходимо загружать по три входящих файла,
+#после чего они будут складываться в archive)
 ##################################################################################################################################################################
 
 def txt_xlsx_2_sql(path, name, con=sql_alch_conn, schema='bank', if_exists='replace', index=False):
@@ -501,6 +503,57 @@ def update_rep_fraud():
         ''')
     conn.commit()
 
+    #заполнение мошенниками с операциями из разных городов
+    cursor.execute(
+        '''
+        insert into REP_FRAUD (
+        event_dt,
+		passport,
+		fio,
+		phone,
+		event_type,
+		report_dt)
+        with hourgroups as (
+            select
+                transaction_date,
+                concat_ws(' ', cl.last_name, cl.first_name, cl.patronymic) as fio,
+                terminal_id,
+                terminal_city,
+                passport_num,
+                phone,
+                min(transaction_date) over (partition by passport_num, date_trunc('hour', transaction_date)) as hour_group
+            from dwh_dim_transactions_hist as th
+            left join v_terminals vt 
+            on th.terminal = vt.terminal_id
+            left join dwh_dim_cards as ca 
+            on th.card_num = ca.card_num
+            left join dwh_dim_accounts as a 
+            on ca.account = a.account
+            left join dwh_dim_clients as cl 
+            on a.client = cl.client_id),
+        citycounts as (
+            select
+                passport_num,
+                hour_group,
+                count(distinct terminal_city) as count_cities
+            from hourgroups
+            where transaction_date < hour_group + interval '1 hour'
+            group by passport_num, hour_group
+        )
+        select distinct
+            hg.transaction_date::date as event_dt,
+            hg.passport_num,
+            hg.fio,
+            hg.phone,
+            'different cities' as event_type,
+            hg.transaction_date::date as event_dt,
+            hg.transaction_date::date as report_dt
+        from hourgroups as hg
+        left join citycounts as cc 
+        on hg.passport_num = cc.passport_num and hg.hour_group = cc.hour_group
+        where coalesce(cc.count_cities, 1) > 1;
+        ''')
+
 update_rep_fraud()
 
 #Удаление временных таблиц
@@ -519,5 +572,3 @@ def del_stg_tables():
     conn.commit()    
 
 del_stg_tables()
-
-#файлы в incoming последовательно кидать надо
