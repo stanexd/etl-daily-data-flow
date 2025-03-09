@@ -96,7 +96,7 @@ txt_xlsx_2_sql(f'incoming_files/transactions_{date_string}.txt', 'stg_new_rows_t
 txt_xlsx_2_sql(f'incoming_files/terminals_{date_string}.xlsx', 'stg_terminals')
 txt_xlsx_2_sql(f'incoming_files/passport_blacklist_{date_string}.xlsx', 'stg_passport_blacklist')
 
-#Перенос файлов в архив
+#Перенос файлов в архив (не добавлял расширение backup, чтобы при отладке проще было их перебрасывать снова в каталог incoming_files)
 ##################################################################################################################################################################
 
 for file_path in Path('incoming_files').iterdir():
@@ -437,6 +437,71 @@ def update_passport_blacklist_hist_table():
 update_transactions_hist_table()
 update_terminals_hist_table()
 update_passport_blacklist_hist_table()
+
+#Создание таблицы с отчетом
+##################################################################################################################################################################
+
+def create_rep_fraud():
+    
+    cursor.execute(
+        '''
+        create table if not exists REP_FRAUD(
+		event_dt date,
+		passport varchar(128),
+		fio varchar(128),
+		phone varchar(128),
+		event_type varchar(128),
+		report_dt date)
+        ''')
+    conn.commit()
+
+create_rep_fraud()
+
+#Заполнение отчетной таблицы
+##################################################################################################################################################################
+
+def update_rep_fraud():
+    
+    #заполнение просроченными, заблокированными паспортами и недействующими договорами
+    cursor.execute(
+        '''
+        insert into REP_FRAUD (
+        event_dt,
+		passport,
+		fio,
+		phone,
+		event_type,
+		report_dt)
+        select distinct
+            to_char(tr.transaction_date, 'YYYY-MM-DD')::date as event_dt,
+            cl.passport_num,
+            concat_ws(' ', cl.last_name, cl.first_name, cl.patronymic) as fio,
+            cl.phone,
+            case
+                when cl.passport_valid_to + interval '23 hours 59 minutes 59 seconds' < tr.transaction_date then 'expired passport'
+                when vpb.passport is not null then 'passport in black list'
+                when a.valid_to < tr.transaction_date then 'invalid contract'
+            end as event_type,
+            to_char(tr.transaction_date, 'YYYY-MM-DD')::date as report_dt
+        from stg_new_rows_transactions as tr
+        left join dwh_dim_cards as ca 
+        on tr.card_num = ca.card_num
+        left join dwh_dim_accounts as a 
+        on ca.account = a.account
+        left join dwh_dim_clients as cl 
+        on a.client = cl.client_id
+        left join v_passport_blacklist as vpb 
+        on vpb.passport = cl.passport_num
+        where
+            case
+                when cl.passport_valid_to + interval '23 hours 59 minutes 59 seconds' < tr.transaction_date then 'expired passport'
+                when vpb.passport is not null then 'passport in black list'
+                when a.valid_to < tr.transaction_date then 'invalid contract'
+            end is not null;
+        ''')
+    conn.commit()
+
+update_rep_fraud()
 
 #Удаление временных таблиц
 ##################################################################################################################################################################
